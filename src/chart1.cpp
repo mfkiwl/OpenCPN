@@ -623,7 +623,8 @@ bool                      g_bDrawAISRealtime;
 double                    g_AIS_RealtPred_Kts;
 bool                      g_bShowAISName;
 int                       g_Show_Target_Name_Scale;
-bool                      g_bWplIsAprsPosition;
+bool                      g_bWplUsePosition;
+int                       g_WplAction;
 
 int                       g_nAIS_activity_timer;
 
@@ -4669,6 +4670,7 @@ void MyFrame::OnToolLeftClick( wxCommandEvent& event )
         {
  #ifdef __OCPN__ANDROID__
             ///LoadS57();
+            androidDisableFullScreen();
             g_MainToolbar->HideTooltip();
             DoAndroidPreferences();
  #else
@@ -4828,6 +4830,10 @@ void MyFrame::OnToolLeftClick( wxCommandEvent& event )
 
         case ID_CMD_APPLY_SETTINGS:{
             applySettingsString(event.GetString());
+#ifdef __OCPN__ANDROID__            
+            androidRestoreFullScreen( );
+#endif            
+
             break;
         }
 
@@ -6169,6 +6175,7 @@ int MyFrame::DoOptionsDialog()
     androidEnableBackButton( true );
     androidEnableOptionsMenu( true );
     androidRestoreFullScreen();
+    androidEnableRotation();
     #endif
     
 
@@ -6182,6 +6189,10 @@ int MyFrame::DoOptionsDialog()
     options_lastWindowSize = g_options->lastWindowSize;
 
     if( 1/*b_sub*/ ) {          // always surface toolbar, and restart the timer if needed
+#ifdef __OCPN__ANDROID__
+      g_MainToolbar-> SetDockX( -1 );
+      g_MainToolbar-> SetDockY( -1 );
+#endif        
         g_MainToolbar->Surface();
         SurfaceAllCanvasToolbars();
         GetPrimaryCanvas()->SetFocus();
@@ -7119,9 +7130,6 @@ void MyFrame::OnInitTimer(wxTimerEvent& event)
             //g_options->SetColorScheme(global_color_scheme);
             //applyDarkAppearanceToWindow(g_options->MacGetTopLevelWindowRef());
 
-            if( g_MainToolbar )
-                g_MainToolbar->EnableTool( ID_SETTINGS, true );
-
             // needed to ensure that the chart window starts with keyboard focus
             SurfaceAllCanvasToolbars();
             
@@ -7189,6 +7197,9 @@ void MyFrame::OnInitTimer(wxTimerEvent& event)
             androidEnableBackButton( true );
             androidEnableRotation();
 #endif
+
+            if( g_MainToolbar )
+                g_MainToolbar->EnableTool( ID_SETTINGS, true );
 
             break;
         }
@@ -7610,7 +7621,10 @@ void MyFrame::OnFrameTimer1( wxTimerEvent& event )
     }
 
     nBlinkerTick++;
-    
+
+    // This call sends autopilot output strings to output ports.
+    bool bactiveRouteUpdate = g_pRouteMan->UpdateProgress();
+
     // For each canvas....
     for(unsigned int i=0 ; i < g_canvasArray.GetCount() ; i++){
         ChartCanvas *cc = g_canvasArray.Item(i);
@@ -7618,8 +7632,8 @@ void MyFrame::OnFrameTimer1( wxTimerEvent& event )
     
             cc->DrawBlinkObjects();
 
-//      Update the active route, if any
-            if( g_pRouteMan->UpdateProgress() ) {
+//      Update the active route, if any, as determined above
+            if( bactiveRouteUpdate ) {
         //    This RefreshRect will cause any active routepoint to blink
                 if( g_pRouteMan->GetpActiveRoute() )
                     cc->RefreshRect( g_blink_rect, false );
@@ -8864,7 +8878,6 @@ void MyFrame::setCourseOverGround(double cog)
     if(!g_own_ship_sog_cog_calc) {
         wxLogDebug(wxString::Format(_T("COG: %f"), cog));
         gCog = cog;
-        gGPS_Watchdog = gps_watchdog_timeout_ticks;
     }
 }
 
@@ -8873,7 +8886,6 @@ void MyFrame::setSpeedOverGround(double sog)
     if(!g_own_ship_sog_cog_calc) {
         wxLogDebug(wxString::Format(_T("SOG: %f"), sog));
         gSog = sog;
-        gGPS_Watchdog = gps_watchdog_timeout_ticks;
     }
 }
 
@@ -9163,7 +9175,10 @@ void MyFrame::OnEvtOCPN_NMEA( OCPN_DataStreamEvent & event )
                 break;
 
             case GSV:
-                setSatelitesInView(m_NMEA0183.Gsv.SatsInView);
+                if (m_NMEA0183.Gsv.MessageNumber == 1) {
+                    // Some GNSS print SatsInView in message #1 only
+                    setSatelitesInView (m_NMEA0183.Gsv.SatsInView);
+                }
                 break;
 
             case GGA:
@@ -11567,6 +11582,83 @@ OCPNMessageDialog::OCPNMessageDialog( wxWindow *parent,
     Centre( wxBOTH | wxCENTER_FRAME);
 }
 
+wxColour GetDialogColor(DialogColor color)
+{
+    wxColour col = *wxRED;
+    
+    bool bUseSysColors = false;
+    bool bIsDarkMode = false;
+#ifdef __WXOSX__
+    if( wxPlatformInfo::Get().CheckOSVersion(10, 14) )
+        bUseSysColors = true;
+#endif
+#ifdef __WXGTK__
+    bUseSysColors= true;
+#endif
+
+    if(bUseSysColors) {
+        wxColour bg = wxSystemSettings::GetColour(wxSYS_COLOUR_APPWORKSPACE);
+        if(bg.Red() < 128) {
+            bIsDarkMode = true;
+        }
+            
+    }
+    
+    switch(color) {
+        case DLG_BACKGROUND:
+            if(bUseSysColors && bIsDarkMode) {
+                col = wxSystemSettings::GetColour(wxSYS_COLOUR_APPWORKSPACE);
+            } else {
+                col = GetGlobalColor("DILG0");
+            }
+            break;
+        case DLG_SELECTED_BACKGROUND:
+            if(bUseSysColors && bIsDarkMode) {
+                col = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW);
+            } else {
+                col = GetGlobalColor("DILG1");
+            }
+            break;
+        case DLG_UNSELECTED_BACKGROUND:
+            if(bUseSysColors && bIsDarkMode) {
+                col = wxSystemSettings::GetColour(wxSYS_COLOUR_APPWORKSPACE);
+            } else {
+                col = GetGlobalColor("DILG0");
+            }
+            break;
+        case DLG_ACCENT:
+        case DLG_SELECTED_ACCENT:
+            if(bUseSysColors && bIsDarkMode) {
+                col = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+            } else {
+                col = GetGlobalColor("DILG3");
+            }
+            break;
+        case DLG_UNSELECTED_ACCENT:
+            if(bUseSysColors && bIsDarkMode) {
+                col = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+            } else {
+                col = GetGlobalColor("DILG1");
+            }
+            break;
+        case DLG_TEXT:
+            if(bUseSysColors && bIsDarkMode) {
+                col = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+            } else {
+                col = GetGlobalColor("DILG3");
+            }
+            break;
+        case DLG_HIGHLIGHT:
+            if(bUseSysColors && bIsDarkMode) {
+                col = wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT);
+            } else {
+                col = GetGlobalColor("UIBCK");
+            }
+            break;
+    }
+    return col;
+}
+
 void OCPNMessageDialog::OnYes(wxCommandEvent& WXUNUSED(event))
 {
     SetReturnCode(wxID_YES);
@@ -11665,14 +11757,29 @@ int OCPNMessageBox( wxWindow *parent, const wxString& message, const wxString& c
 {
 #ifdef __OCPN__ANDROID__
     androidDisableRotation();
-#endif
+    int style_mod = style;
+
+    auto dlg = new wxMessageDialog(parent, message, caption,  style_mod);
+    int ret = dlg->ShowModal();
+    qDebug() << "OCPNMB-1 ret" << ret;
+
+    //int ret= dlg->GetReturnCode();
+
+    //  Not sure why we need this, maybe on wx3?
+    if( ((style & wxYES_NO) == wxYES_NO) && (ret == wxID_OK))
+        ret = wxID_YES;
+
+    dlg->Destroy();
+
+    androidEnableRotation();
+    qDebug() << "OCPNMB-2 ret" << ret;
+    return ret;
+    
+#else
     int ret =  wxID_OK;
 
     TimedMessageBox tbox(parent, message, caption, style, timeout_sec, wxPoint( x, y )  );
     ret = tbox.GetRetVal() ;
-
-#ifdef __OCPN__ANDROID__
-    androidEnableRotation();
 #endif
 
     return ret;

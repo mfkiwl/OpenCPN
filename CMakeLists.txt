@@ -311,6 +311,7 @@ option(OCPN_USE_SVG "Use SVG graphics" ON)
 option(OCPN_USE_WEBVIEW "Use wxWidget's webview addon if available" ON)
 option(OCPN_USE_LZMA "Use LZMA for chart compression" ON)
 option(OCPN_CI_BUILD "Use CI build versioning rules" OFF)
+option(OCPN_USE_SYSTEM_LIBARCHIVE "Use the libarchive version provided by the system on MacOS" ON)
 
 option(
   OCPN_ENABLE_SYSTEM_CMD_SOUND
@@ -562,10 +563,13 @@ set(
 # Per default, use CMAKE_INSTALL_LIBDIR=lib on Debian (and derivatives)
 # to avoid multilib plugin paths. After all, we do not install any
 # "real" libraries.
+message(STATUS "CMAKE_INSTALL_LIBDIR1 ${CMAKE_INSTALL_LIBDIR}")
 if (EXISTS /etc/debian_version AND NOT DEFINED CMAKE_INSTALL_LIBDIR)
   set(CMAKE_INSTALL_LIBDIR "lib")
 endif ()
+message(STATUS "CMAKE_INSTALL_LIBDIR2 ${CMAKE_INSTALL_LIBDIR}")
 include(GNUInstallDirs)
+message(STATUS "CMAKE_INSTALL_LIBDIR3  ${CMAKE_INSTALL_LIBDIR}")
 
 set(PREFIX_BIN ${CMAKE_INSTALL_BINDIR})
 set(PREFIX_INCLUDE ${CMAKE_INSTALL_INCLUDEDIR})
@@ -656,7 +660,13 @@ IF(DEFINED _wx_selected_config)
   ENDIF(_wx_selected_config MATCHES "androideabi-qt")
 ENDIF(DEFINED _wx_selected_config)
 
-if ((_wx_selected_config MATCHES "qt-armv7"))
+if (APPLE)
+  # Bundle all of wxWidgets as a courtesy for plugins, see #2153
+  set(wxWidgets_FIND_COMPONENTS
+    net xml html adv aui core base media propgrid qa ribbon richtext
+    webview stc xrc
+  )
+elseif ((_wx_selected_config MATCHES "qt-armv7"))
   set(wxWidgets_FIND_COMPONENTS base core xml html adv aui)
 elseif (OCPN_USE_WEBVIEW)
   set(wxWidgets_FIND_COMPONENTS net xml html adv aui core base webview)
@@ -864,6 +874,7 @@ endif (QT_ANDROID)
 
 set(
   HDRS
+  include/config_var.h
   include/AboutFrame.h
   include/AboutFrameImpl.h
   include/about.h
@@ -879,6 +890,7 @@ set(
   include/catalog_handler.h
   include/catalog_mgr.h
   include/catalog_parser.h
+  include/cat_settings.h
   include/chart1.h
   include/ChartDataInputStream.h
   include/chartdb.h
@@ -990,6 +1002,7 @@ set(
 
 set(
   SRCS
+  src/config_var.cpp
   src/about.cpp
   src/AboutFrame.cpp
   src/AboutFrameImpl.cpp
@@ -1007,6 +1020,7 @@ set(
   src/catalog_handler.cpp
   src/catalog_mgr.cpp
   src/catalog_parser.cpp
+  src/cat_settings.cpp
   src/chart1.cpp
   src/ChartDataInputStream.cpp
   src/chartdb.cpp
@@ -1307,6 +1321,16 @@ if (UNIX)
       # should probably replace it with pugixml completely anyway...
       find_package(TinyXML)
     endif (NOT APPLE)
+    if (APPLE)
+      find_package(Freetype REQUIRED)
+      target_link_libraries(${PACKAGE_NAME} PRIVATE Freetype::Freetype)
+      find_package(Fontconfig REQUIRED)
+      target_link_libraries(${PACKAGE_NAME} PRIVATE Fontconfig::Fontconfig)
+      find_package(PNG REQUIRED)
+      target_link_libraries(${PACKAGE_NAME} PRIVATE PNG::PNG)
+      find_package(Pixman REQUIRED)
+      target_link_libraries(${PACKAGE_NAME} PRIVATE Pixman::Pixman)
+    endif ()
   endif (NOT QT_ANDROID)
 endif (UNIX)
 
@@ -1516,9 +1540,19 @@ if (QT_ANDROID)
   target_link_libraries(${PACKAGE_NAME}
     PRIVATE ${CMAKE_SOURCE_DIR}/buildandroid/libarchive/${ANDROID_ARCH}/libarchive.a)
 elseif ( APPLE )
-    #  TODO This is a hack, due to the way libarchive is built and installed in CI build environment 
-    target_include_directories(${PACKAGE_NAME} PRIVATE /usr/local/include)
-    target_link_libraries(${PACKAGE_NAME} PRIVATE /usr/local/lib/libarchive.dylib)
+    if (OCPN_USE_SYSTEM_LIBARCHIVE)
+        list(APPEND CMAKE_PREFIX_PATH "/usr/local/opt/libarchive")
+        find_package(LibArchive REQUIRED)
+        target_include_directories(${PACKAGE_NAME} PRIVATE ${LibArchive_INCLUDE_DIRS})
+        target_link_libraries(${PACKAGE_NAME} PRIVATE ${LibArchive_LIBRARIES})
+        # If we use system libarchive, we do not bundel the dylib and need to comment it out from the pkg project file
+        set(LIBARCHIVE_COMMENT_START "<!--")
+        set(LIBARCHIVE_COMMENT_END "-->")
+    else()
+        #  TODO This is a hack, due to the way libarchive is built and installed in CI build environment 
+        target_include_directories(${PACKAGE_NAME} PRIVATE /usr/local/include)
+        target_link_libraries(${PACKAGE_NAME} PRIVATE /usr/local/lib/libarchive.dylib)
+    endif()
 else ()
   find_package(LibArchive REQUIRED)
   target_include_directories(${PACKAGE_NAME} PRIVATE ${LibArchive_INCLUDE_DIRS})
@@ -1698,7 +1732,7 @@ if ("${wxWidgets_LIBRARIES}" MATCHES "gtk3u" AND PKG_TARGET STREQUAL "ubuntu")
   set(PKG_TARGET "${PKG_TARGET}-gtk3")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__WXGTK3__")
 endif ()
-configure_file(config.h.in ${CMAKE_BINARY_DIR}/include/config.h)
+configure_file(${CMAKE_SOURCE_DIR}/cmake/in-files/config.h.in ${CMAKE_BINARY_DIR}/include/config.h)
 include_directories(BEFORE "${CMAKE_BINARY_DIR}/include")
 
 if (NOT APPLE AND NOT QT_ANDROID)
@@ -2225,7 +2259,7 @@ if (NOT APPLE)
     install(
       FILES ${CMAKE_BINARY_DIR}/opencpn.appdata.xml
       DESTINATION ${PREFIX_DATA}/metainfo
-      RENAME opencpn.metainfo.xml
+      RENAME opencpn.appdata.xml
     )
     install(FILES opencpn.1 DESTINATION ${PREFIX_DATA}/man/man1)
   endif (UNIX)
@@ -2318,7 +2352,7 @@ macro (GETTEXT_BUILD_MO _poFile _lang)
     COMMAND ${GETTEXT_MSGFMT_EXECUTABLE} --check -o ${_gmoFile} ${_absFile}
     COMMAND
       ${CMAKE_COMMAND} -E copy ${_gmoFile}
-      ${CMAKE_CURRENT_BINARY_DIR}/Resources/${PACKAGE_NAME}_${_lang}.lproj/${PACKAGE_NAME}.mo
+      ${CMAKE_CURRENT_BINARY_DIR}/Resources/opencpn_${_lang}.lproj/opencpn.mo
     DEPENDS ${_absFile}
     COMMENT "i18n [${_poBasename}]: Created mo file."
   )
@@ -2716,7 +2750,7 @@ if (APPLE)
   set(CPACK_BUNDLE_PLIST "${CMAKE_SOURCE_DIR}/buildosx/Info.plist.in")
 
   set(APPS "\${CMAKE_INSTALL_PREFIX}/bin/OpenCPN.app")
-  set(DIRS "")
+  set(DIRS "/usr/local/lib")
 
   # INSTALL(DIRECTORY DESTINATION "bin/OpenCPN.app/Contents/PlugIns")
   install(
@@ -2742,10 +2776,13 @@ if (APPLE)
     "\${CMAKE_INSTALL_PREFIX}/bin/OpenCPN.app/Contents/PlugIns/libchartdldr_pi.dylib"
     "\${CMAKE_INSTALL_PREFIX}/bin/OpenCPN.app/Contents/PlugIns/libwmm_pi.dylib"
   )
-  install(CODE "
-    include(BundleUtilities)
-    fixup_bundle(\"${APPS}\"   \"${LIBS}\"   \"${DIRS}\")
-    " COMPONENT Runtime)
+install(CODE "
+  include(BundleUtilities)
+  set(BU_CHMOD_BUNDLE_ITEMS TRUE)
+  fixup_bundle(\"${APPS}\"  \"${LIBS}\"  \"${DIRS}\")
+  "
+  COMPONENT Runtime
+)
 
   #Build standard MacOS installer package
   #  Copy a few generic files so the Packages installer builder can find them relative to ${CMAKE_CURRENT_BINARY_DIR}

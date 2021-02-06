@@ -46,7 +46,7 @@
 extern PlugInManager    *g_pi_manager;
 extern wxString         g_GPS_Ident;
 extern bool             g_bGarminHostUpload;
-extern bool             g_bWplIsAprsPosition;
+extern bool             g_bWplUsePosition;
 extern wxArrayOfConnPrm  *g_pConnectionParams;
 extern bool             g_bserial_access_checked;
 extern bool             g_b_legacy_input_filter_behaviour;
@@ -270,7 +270,7 @@ void Multiplexer::OnEvtStream(OCPN_DataStreamEvent& event)
                 message.Mid(3,3).IsSameAs(_T("TLL")) ||
                 message.Mid(3,3).IsSameAs(_T("TTM")) ||
                 message.Mid(3,3).IsSameAs(_T("OSD")) ||
-                ( g_bWplIsAprsPosition && message.Mid(3,3).IsSameAs(_T("WPL")) ) )
+                ( g_bWplUsePosition && message.Mid(3,3).IsSameAs(_T("WPL")) ) )
             {
                 if( m_aisconsumer )
                     m_aisconsumer->AddPendingEvent(event);
@@ -557,6 +557,9 @@ ret_point:
                                                     DS_TYPE_INPUT_OUTPUT,
                                                     0, false);
 
+#ifdef __OCPN__ANDROID__
+            wxMilliSleep(1000);
+#else
             //  Wait up to 5 seconds for Datastream secondary thread to come up
             int timeout = 0;
             while( !dstr-> IsSecThreadActive()  && (timeout < 50)) {
@@ -573,6 +576,7 @@ ret_point:
                 dstr->Close();
                 goto ret_point_1;
             }
+#endif
 
             SENTENCE snt;
             NMEA0183 oNMEA0183;
@@ -1112,6 +1116,9 @@ int Multiplexer::SendWaypointToGPS(RoutePoint *prp, const wxString &com_name, wx
                                             0, false);
 
 
+#ifdef __OCPN__ANDROID__
+        wxMilliSleep(1000);
+#else
     //  Wait up to 1 seconds for Datastream secondary thread to come up
     int timeout = 0;
     while( !dstr-> IsSecThreadActive()  && (timeout < 50)) {
@@ -1128,6 +1135,7 @@ int Multiplexer::SendWaypointToGPS(RoutePoint *prp, const wxString &com_name, wx
         dstr->Close();
         goto ret_point;
     }
+#endif
 
 
 

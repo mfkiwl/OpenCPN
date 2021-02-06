@@ -363,6 +363,11 @@ bool OCPNPlatform::DetectOSDetail( OCPN_OSDetail *detail)
     // We take some defaults from build-time definitions
     detail->osd_name = std::string(PKG_TARGET);
     detail->osd_version = std::string(PKG_TARGET_VERSION);
+    detail->osd_build_name = std::string(PKG_TARGET);
+    detail->osd_build_target = std::string(PKG_BUILD_TARGET);
+    detail->osd_build_version = std::string(PKG_TARGET_VERSION);
+    detail->osd_build_arch = std::string(PKG_TARGET_ARCH);
+    detail->osd_build_gtk = std::string(PKG_BUILD_GTK);
  
     // Now parse by basic platform
 #ifdef __linux__
@@ -378,6 +383,10 @@ bool OCPNPlatform::DetectOSDetail( OCPN_OSDetail *detail)
                 else if(str.StartsWith(_T("VERSION_ID"))){
                     val = str.AfterFirst('=').Mid(1);  val = val.Mid(0, val.Length()-1);
                     if(val.Length())  detail->osd_version = std::string(val.mb_str());
+                }
+                else if(str.StartsWith(_T("ID="))){
+                    val = str.AfterFirst('=');
+                    if(val.Length())  detail->osd_ID = ocpn::split(val.mb_str(), " ")[0];
                 }
                 else if(str.StartsWith(_T("ID_LIKE"))){
                     if(val.StartsWith('"')){
@@ -432,8 +441,12 @@ bool OCPNPlatform::DetectOSDetail( OCPN_OSDetail *detail)
         detail->osd_arch = std::string("armhf");
 #endif    
     
-    
-     
+#ifdef __OCPN__ANDROID__
+    detail->osd_arch = std::string("arm64");
+    if(arch == wxARCH_32)
+        detail->osd_arch = std::string("armhf");
+#endif    
+
     return true;
 }    
 
@@ -1269,8 +1282,9 @@ void OCPNPlatform::SetDefaultOptions( void )
         pConfig->Write( _T ( "bEnabled" ), true );
         
         pConfig->SetPath ( _T ( "/Settings/WMM" ) );
-        pConfig->Write ( _T ( "ShowIcon" ), false );
-   
+        pConfig->Write ( _T ( "ShowIcon" ), true );
+        pConfig->Write ( _T ( "ShowLiveIcon" ), true );
+  
         pConfig->SetPath( _T ( "/PlugIns/libgrib_pi.so" ) );
         pConfig->Write( _T ( "bEnabled" ), true );
         
@@ -1353,7 +1367,10 @@ void OCPNPlatform::SetUpgradeOptions( wxString vNew, wxString vOld )
             // Clear the default chart storage location
             // Will get set to e.g. "/storage/emulated/0" later
             pInit_Chart_Dir->Clear();
-
+            
+            pConfig->SetPath ( _T ( "/Settings/WMM" ) );
+            pConfig->Write ( _T ( "ShowIcon" ), true );
+            pConfig->Write ( _T ( "ShowLiveIcon" ), true );
         }
         
         // Set track default color to magenta
@@ -1597,6 +1614,10 @@ wxString OCPNPlatform::GetPluginDataPath()
         return m_pluginDataPath;
     }
     wxString dirs("");
+#ifdef __OCPN__ANDROID__
+    wxString pluginDir = GetPrivateDataDir() + "/plugins";
+    dirs += pluginDir;
+#else    
     auto const osSystemId = wxPlatformInfo::Get().GetOperatingSystemId();
     if (g_Platform->isFlatpacked()) {
         dirs="~/.var/app/org.opencpn.OpenCPN/data/opencpn/plugins";
@@ -1612,6 +1633,8 @@ wxString OCPNPlatform::GetPluginDataPath()
         dirs +=
             "~/Library/Application Support/OpenCPN/Contents/SharedSupport/plugins";
     }
+#endif
+    
     m_pluginDataPath = ExpandPaths(dirs, this);
     if (m_pluginDataPath != "") {
         m_pluginDataPath += ";";

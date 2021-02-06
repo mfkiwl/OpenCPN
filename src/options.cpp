@@ -123,6 +123,7 @@ extern GLuint g_raster_format;
 #include "ConfigMgr.h"
 
 #include "SignalKDataStream.h"
+#include "config_var.h"
 
 #if !defined(__WXOSX__)  
 #define SLIDER_STYLE  wxSL_HORIZONTAL | wxSL_AUTOTICKS | wxSL_LABELS
@@ -203,7 +204,8 @@ extern bool g_bDrawAISRealtime;
 extern double g_AIS_RealtPred_Kts;
 extern bool g_bShowAISName;
 extern int g_Show_Target_Name_Scale;
-extern bool g_bWplIsAprsPosition;
+extern bool g_bWplUsePosition;
+extern int  g_WplAction;
 
 extern int g_iNavAidRadarRingsNumberVisible;
 extern float g_fNavAidRadarRingsStep;
@@ -274,6 +276,7 @@ extern bool g_bFullScreenQuilt;
 extern bool g_bConfirmObjectDelete;
 extern wxString g_GPS_Ident;
 extern bool g_bGarminHostUpload;
+extern wxString  g_compatOS;
 
 #if wxUSE_XLOCALE || !wxCHECK_VERSION(3, 0, 0)
 extern wxLocale* plocale_def_lang;
@@ -1571,6 +1574,10 @@ For more info, see the file LINUX_DEVICES.md in the distribution docs.
 void options::CheckDeviceAccess( /*[[maybe_unused]]*/ wxString &path) {
    // Microsoft compiler 19.14.26433 requires rightfully std=c++-17 for this.
 
+#ifdef __OCPN__ANDROID__
+   return;
+#endif
+   
 #ifndef __linux__
    return;
 #else
@@ -3083,9 +3090,10 @@ void options::CreatePanel_Ownship(size_t parent, int border_size,
 
   wxString iconTypes[] = {_("Default"), _("Real Scale Bitmap"),
                           _("Real Scale Vector")};
+                          
   m_pShipIconType =
-      new wxChoice(itemPanelShip, ID_SHIPICONTYPE, wxDefaultPosition,
-                   wxDefaultSize, 3, iconTypes);
+      new wxChoice(itemPanelShip, ID_SHIPICONTYPE, wxDefaultPosition, 
+                   wxSize(GetCharWidth() * 20, GetCharHeight() * 2), 3, iconTypes);
   dispOptionsGrid->Add(m_pShipIconType, 0,
                        wxALIGN_RIGHT | wxLEFT | wxRIGHT | wxTOP,
                        group_item_spacing);
@@ -4010,8 +4018,7 @@ void options::CreatePanel_Advanced(size_t parent, int border_size,
     itemBoxSizerUI->Add(m_pSlider_Zoom_Vector, inputFlags);
 
     itemBoxSizerUI->Add(
-        new wxStaticText(m_ChartDisplayPage, wxID_ANY, _("CM93 Detail level")),
-        labelFlags);
+        new wxStaticText(m_ChartDisplayPage, wxID_ANY, _("CM93 Detail level")), inputFlags);
     m_pSlider_CM93_Zoom = new wxSlider( m_ChartDisplayPage, ID_CM93ZOOM, 0,
                            -CM93_ZOOM_FACTOR_MAX_RANGE, CM93_ZOOM_FACTOR_MAX_RANGE,
                            wxDefaultPosition, m_sliderSize, SLIDER_STYLE);
@@ -5573,21 +5580,20 @@ void options::CreatePanel_AIS(size_t parent, int border_size,
   m_pCheck_Show_Target_Name = new wxCheckBox(
       panelAIS, -1, _("Show names with AIS targets at scale greater than 1:"));
   pDisplayGrid->Add(m_pCheck_Show_Target_Name, 1, wxALL, group_item_spacing);
-
+  
   m_pText_Show_Target_Name_Scale = new wxTextCtrl(panelAIS, -1);
   pDisplayGrid->Add(m_pText_Show_Target_Name_Scale, 1, wxALL | wxALIGN_RIGHT,
                     group_item_spacing);
+  
+  m_pCheck_use_Wpl = new wxCheckBox( panelAIS, -1, 
+                     _("Use WPL position messages. Action when received:"));
+  pDisplayGrid->Add(m_pCheck_use_Wpl, 1, wxALL, group_item_spacing);
 
-  m_pCheck_Wpl_Aprs = new wxCheckBox(
-      panelAIS, -1, _("Treat WPL sentences as APRS position reports"));
-  pDisplayGrid->Add(m_pCheck_Wpl_Aprs, 1, wxALL, group_item_spacing);
-
-  wxStaticText* pStatic_Dummy7 = new wxStaticText(panelAIS, -1, _T(""));
-  pDisplayGrid->Add(pStatic_Dummy7, 1, wxALL, group_item_spacing);
-
-  wxStaticText* pStatic_Dummy5a = new wxStaticText(panelAIS, -1, _T(""));
-  pDisplayGrid->Add(pStatic_Dummy5a, 1, wxALL, group_item_spacing);
-
+  wxString Wpl_Action[] = {_("APRS position report"), _("Create mark")};
+  m_pWplAction = new wxChoice(panelAIS, wxID_ANY, wxDefaultPosition,
+                              m_pShipIconType->GetSize(), 2, Wpl_Action);
+  pDisplayGrid->Add(m_pWplAction, 0, wxALIGN_RIGHT | wxALL, group_item_spacing);
+    
   // Rollover
   wxStaticBox* rolloverBox = new wxStaticBox(panelAIS, wxID_ANY, _("Rollover"));
   wxStaticBoxSizer* rolloverSizer =
@@ -6653,7 +6659,8 @@ void options::SetInitialSettings(void) {
   s.Printf(_T("%d"), g_Show_Target_Name_Scale);
   m_pText_Show_Target_Name_Scale->SetValue(s);
 
-  m_pCheck_Wpl_Aprs->SetValue(g_bWplIsAprsPosition);
+  m_pCheck_use_Wpl->SetValue(g_bWplUsePosition);
+  m_pWplAction->SetSelection(g_WplAction);
 
   // Alerts
   m_pCheck_AlertDialog->SetValue(g_bAIS_CPA_Alert);
@@ -7607,6 +7614,11 @@ void options::OnApplyClick(wxCommandEvent& event) {
         if (pds_existing) g_pMUX->StopAndRemoveStream(pds_existing);
     }
 
+    // Internal BlueTooth driver stacks commonly need a time delay to purge their buffers, etc.
+    // before restating with new parameters...
+    if(cp->Type == INTERNAL_BT)
+        wxSleep(1);
+
     if (!cp->bEnabled) continue;
     g_pMUX->AddStream(makeDataStream(g_pMUX, cp));
     cp->b_IsSetup = TRUE;
@@ -7796,8 +7808,8 @@ void options::OnApplyClick(wxCommandEvent& event) {
   long ais_name_scale = 5000;
   m_pText_Show_Target_Name_Scale->GetValue().ToLong(&ais_name_scale);
   g_Show_Target_Name_Scale = (int)wxMax(5000, ais_name_scale);
-
-  g_bWplIsAprsPosition = m_pCheck_Wpl_Aprs->GetValue();
+  g_bWplUsePosition = m_pCheck_use_Wpl->GetValue();
+  g_WplAction = m_pWplAction->GetSelection();
 
   //   Alert
   g_bAIS_CPA_Alert = m_pCheck_AlertDialog->GetValue();
@@ -8078,6 +8090,13 @@ void options::OnButtondeleteClick(wxCommandEvent& event)
       if ( item == -1 )
           break;
       pActiveChartsList->DeleteItem( item );
+
+      // On Android, there is some trouble with wxLIST_STATE_SELECTED.
+      // So, only allow deletion of one item per click.
+#ifdef __OCPN__ANDROID__
+      break;
+#endif
+      
       item = -1;      // Restart
   }
 
@@ -8816,18 +8835,26 @@ void options::DoOnPageChange(size_t page) {
       if(g_pi_manager)
           g_pi_manager->SetListPanelPtr(m_pPlugInCtrl);
 
-#ifndef __OCPN__ANDROID__      
       m_PluginCatalogMgrPanel = new CatalogMgrPanel(itemPanelPlugins);
       m_PluginCatalogMgrPanel->SetListPanelPtr(m_pPlugInCtrl);
       
       itemBoxSizerPanelPlugins->Add(m_PluginCatalogMgrPanel, 0, wxEXPAND | wxALL, 4);
-#endif      
       itemBoxSizerPanelPlugins->Layout();
 
       //  Update the PlugIn page to reflect the state of individual selections
       m_pPlugInCtrl->UpdateSelections();
 
       ::wxEndBusyCursor();
+
+      wxDEFINE_EVENT(EVT_COMPAT_OS_CHANGE, wxCommandEvent);
+      ocpn::GlobalVar<wxString> compat_os(&g_compatOS);
+      compat_os.listen(this, EVT_COMPAT_OS_CHANGE);
+      Bind(EVT_COMPAT_OS_CHANGE,
+           [&](wxCommandEvent&) {
+               g_pi_manager->LoadAllPlugIns(false);
+               auto plugins = g_pi_manager->GetPlugInArray();
+               m_pPlugInCtrl->ReloadPluginPanels(plugins);
+           });
     }
 
     k_plugins = TOOLBAR_CHANGED;
@@ -9172,6 +9199,13 @@ void ChartGroupsUI::OnInsertChartItem(wxCommandEvent& event) {
   modified = TRUE;
   allAvailableCtl->GetTreeCtrl()->UnselectAll();
   m_pAddButton->Disable();
+  
+  wxGenericDirCtrl* pDirCtrl = (m_DirCtrlArray[m_GroupSelectedPage]);
+  if(pDirCtrl){
+      wxTreeCtrl* ptree = pDirCtrl->GetTreeCtrl();
+      if( ptree )
+          ptree->Refresh();
+  }
 }
 
 void ChartGroupsUI::OnRemoveChartItem(wxCommandEvent& event) {
@@ -9219,9 +9253,15 @@ void ChartGroupsUI::OnRemoveChartItem(wxCommandEvent& event) {
         lastSelectedCtl->Unselect();
         lastSelectedCtl = 0;
         m_pRemoveButton->Disable();
-        wxLogMessage(_T("Disable"));
+
+        wxGenericDirCtrl* pDirCtrl = (m_DirCtrlArray[m_GroupSelectedPage]);
+        if(pDirCtrl){
+            wxTreeCtrl* ptree = pDirCtrl->GetTreeCtrl();
+            if( ptree )
+                ptree->Refresh();
+        }
       }
-    }
+     }
   }
   event.Skip();
 }

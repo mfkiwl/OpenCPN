@@ -60,6 +60,12 @@ public:
     std::string                 osd_version;
     std::vector<std::string>    osd_name_like;
     std::string                 osd_arch;
+    std::string                 osd_ID;
+    std::string                 osd_build_name;
+    std::string                 osd_build_target;
+    std::string                 osd_build_version;
+    std::string                 osd_build_arch;
+    std::string                 osd_build_gtk;
 
 };
  
